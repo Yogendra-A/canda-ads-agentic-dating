@@ -12,7 +12,8 @@ APIFY_BASE_URL = "https://api.apify.com/v2"
 
 class ApifyService:
     def __init__(self, api_token: Optional[str] = None):
-        self.api_token = api_token or APIFY_API_TOKEN
+        from backend import config
+        self.api_token = api_token or config.APIFY_API_TOKEN
 
     def is_configured(self) -> bool:
         return bool(self.api_token and self.api_token.strip())

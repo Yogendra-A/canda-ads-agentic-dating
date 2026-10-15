@@ -144,11 +144,13 @@ class ProfileAnalysisService:
         Analyze profile using configured LLM provider (OpenAI, Anthropic, or Gemini).
         Falls back seamlessly to deterministic analysis if LLM call fails or is unconfigured.
         """
-        if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
+        from backend import config
+        provider = config.LLM_PROVIDER.lower()
+        if provider == "openai" and config.OPENAI_API_KEY:
             return await cls._call_openai(person_dict)
-        elif LLM_PROVIDER == "anthropic" and ANTHROPIC_API_KEY:
+        elif provider == "anthropic" and config.ANTHROPIC_API_KEY:
             return await cls._call_anthropic(person_dict)
-        elif LLM_PROVIDER == "gemini" and GEMINI_API_KEY:
+        elif provider == "gemini" and config.GEMINI_API_KEY:
             return await cls._call_gemini(person_dict)
         else:
             # Deterministic fallback
@@ -156,10 +158,11 @@ class ProfileAnalysisService:
 
     @classmethod
     async def _call_openai(cls, person_dict: Dict[str, Any]) -> ProfileAnalysis:
+        from backend import config
         try:
             prompt = cls._build_analysis_prompt(person_dict)
             headers = {
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Authorization": f"Bearer {config.OPENAI_API_KEY}",
                 "Content-Type": "application/json"
             }
             payload = {
@@ -175,42 +178,61 @@ class ProfileAnalysisService:
                 resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    content = json.loads(data["choices"][0]["message"]["content"])
+                    text = data["choices"][0]["message"]["content"].strip()
+                    if "```json" in text:
+                        text = text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in text:
+                        text = text.split("```")[1].split("```")[0].strip()
+                    content = json.loads(text)
                     content["analysis_engine"] = "llm_openai"
                     content["analyzed_at"] = datetime.now(timezone.utc).isoformat()
                     return ProfileAnalysis.model_validate(content)
+                else:
+                    logger.warning(f"OpenAI API returned status {resp.status_code}")
         except Exception as e:
-            logger.warning(f"OpenAI analysis failed, falling back to deterministic: {e}")
+            logger.warning(f"OpenAI analysis failed, falling back to deterministic: {type(e).__name__}")
         return cls.deterministic_analyze(person_dict)
 
     @classmethod
     async def _call_gemini(cls, person_dict: Dict[str, Any]) -> ProfileAnalysis:
+        from backend import config
         try:
             prompt = cls._build_analysis_prompt(person_dict)
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+            headers = {
+                "x-goog-api-key": config.GEMINI_API_KEY,
+                "Content-Type": "application/json"
+            }
             payload = {
                 "contents": [{"parts": [{"text": f"Return JSON only conforming to the schema.\n\n{prompt}"}]}],
                 "generationConfig": {"response_mime_type": "application/json"}
             }
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=payload, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    if "```json" in text:
+                        text = text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in text:
+                        text = text.split("```")[1].split("```")[0].strip()
                     content = json.loads(text)
                     content["analysis_engine"] = "llm_gemini"
                     content["analyzed_at"] = datetime.now(timezone.utc).isoformat()
                     return ProfileAnalysis.model_validate(content)
+                else:
+                    logger.warning(f"Gemini API returned status {resp.status_code}")
         except Exception as e:
-            logger.warning(f"Gemini analysis failed, falling back to deterministic: {e}")
+            logger.warning(f"Gemini analysis failed, falling back to deterministic: {type(e).__name__}")
         return cls.deterministic_analyze(person_dict)
 
     @classmethod
     async def _call_anthropic(cls, person_dict: Dict[str, Any]) -> ProfileAnalysis:
+        from backend import config
         try:
             prompt = cls._build_analysis_prompt(person_dict)
             headers = {
-                "x-api-key": ANTHROPIC_API_KEY,
+                "x-api-key": config.ANTHROPIC_API_KEY,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json"
             }
@@ -227,12 +249,17 @@ class ProfileAnalysisService:
                     json_str = text.strip()
                     if "```json" in json_str:
                         json_str = json_str.split("```json")[1].split("```")[0].strip()
+                    elif "```" in json_str:
+                        json_str = json_str.split("```")[1].split("```")[0].strip()
                     content = json.loads(json_str)
                     content["analysis_engine"] = "llm_anthropic"
                     content["analyzed_at"] = datetime.now(timezone.utc).isoformat()
                     return ProfileAnalysis.model_validate(content)
+                else:
+                    logger.warning(f"Anthropic API returned status {resp.status_code}")
         except Exception as e:
-            logger.warning(f"Anthropic analysis failed, falling back to deterministic: {e}")
+            logger.warning(f"Anthropic analysis failed, falling back to deterministic: {type(e).__name__}")
+        return cls.deterministic_analyze(person_dict)
         return cls.deterministic_analyze(person_dict)
 
     @classmethod

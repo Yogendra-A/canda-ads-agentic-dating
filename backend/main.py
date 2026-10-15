@@ -1,3 +1,4 @@
+import os
 import json
 import uuid
 import logging
@@ -553,10 +554,40 @@ def reseed_demo():
 # 15. Settings & Config
 @app.get("/api/settings")
 def get_settings():
+    from backend import config
+    config.reload_config()
     return SettingsResponse(
-        has_apify_token=bool(APIFY_API_TOKEN and APIFY_API_TOKEN.strip()),
-        apify_linkedin_actor_id=APIFY_LINKEDIN_ACTOR_ID,
-        apify_instagram_actor_id=APIFY_INSTAGRAM_ACTOR_ID,
-        llm_provider=LLM_PROVIDER,
-        has_llm_key=bool(OPENAI_API_KEY or ANTHROPIC_API_KEY or GEMINI_API_KEY)
+        has_apify_token=bool(config.APIFY_API_TOKEN and config.APIFY_API_TOKEN.strip()),
+        apify_linkedin_actor_id=config.APIFY_LINKEDIN_ACTOR_ID,
+        apify_instagram_actor_id=config.APIFY_INSTAGRAM_ACTOR_ID,
+        llm_provider=config.LLM_PROVIDER,
+        has_llm_key=bool(config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY or config.GEMINI_API_KEY)
+    )
+
+@app.post("/api/settings")
+def update_settings(update: SettingsUpdate):
+    from backend import config
+    # Update active environment
+    if update.apify_api_token is not None:
+        os.environ["APIFY_API_TOKEN"] = update.apify_api_token
+    if update.apify_linkedin_actor_id is not None:
+        os.environ["APIFY_LINKEDIN_ACTOR_ID"] = update.apify_linkedin_actor_id
+    if update.apify_instagram_actor_id is not None:
+        os.environ["APIFY_INSTAGRAM_ACTOR_ID"] = update.apify_instagram_actor_id
+    if update.llm_provider is not None:
+        os.environ["LLM_PROVIDER"] = update.llm_provider
+    if update.openai_api_key is not None:
+        os.environ["OPENAI_API_KEY"] = update.openai_api_key
+    if update.anthropic_api_key is not None:
+        os.environ["ANTHROPIC_API_KEY"] = update.anthropic_api_key
+    if update.gemini_api_key is not None:
+        os.environ["GEMINI_API_KEY"] = update.gemini_api_key
+
+    config.reload_config()
+    return SettingsResponse(
+        has_apify_token=bool(config.APIFY_API_TOKEN and config.APIFY_API_TOKEN.strip()),
+        apify_linkedin_actor_id=config.APIFY_LINKEDIN_ACTOR_ID,
+        apify_instagram_actor_id=config.APIFY_INSTAGRAM_ACTOR_ID,
+        llm_provider=config.LLM_PROVIDER,
+        has_llm_key=bool(config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY or config.GEMINI_API_KEY)
     )
