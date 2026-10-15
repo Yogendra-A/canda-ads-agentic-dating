@@ -205,7 +205,7 @@ def import_people(payload: ImportPayload):
             """, (
                 person_id, item.display_name, item.headline, item.bio,
                 item.linkedin_url, item.instagram_url, item.avatar_url,
-                "manual_import", now_str, 1, now_str, now_str
+                "manual_import", now_str, 0, now_str, now_str
             ))
 
             # Automatically run profile analysis for newly imported person
@@ -239,7 +239,7 @@ def import_people(payload: ImportPayload):
     return {
         "status": "success",
         "imported_count": imported_count,
-        "message": f"Successfully imported and analyzed {imported_count} verified profiles."
+        "message": f"Imported {imported_count} profiles. Manual imports remain unverified until their identities and source URLs are checked."
     }
 
 # 5. Apify Collection Trigger

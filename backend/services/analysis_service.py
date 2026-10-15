@@ -11,6 +11,7 @@ from backend.models import ProfileAnalysis, EvidenceItem
 from backend.database import get_db
 
 logger = logging.getLogger("analysis_service")
+GEMINI_MODEL = "gemini-3.8-flash"
 
 # Curated thematic keywords for deterministic evidence extraction
 DOMAIN_KEYWORD_MAP = {
@@ -50,8 +51,8 @@ class ProfileAnalysisService:
         combined_text = f"{headline} {bio}".lower()
 
         matched_interests = []
-        matched_lifestyle = []
         evidence_list = []
+        source_url = person_dict.get("linkedin_url") or person_dict.get("instagram_url")
 
         # Analyze keywords against domain map
         for domain, keywords in DOMAIN_KEYWORD_MAP.items():
@@ -59,19 +60,20 @@ class ProfileAnalysisService:
                 if re.search(r"\b" + re.escape(kw) + r"\b", combined_text):
                     if domain not in matched_interests and len(matched_interests) < 5:
                         matched_interests.append(domain)
-                    # Evidence citation
-                    source_url = person_dict.get("linkedin_url") or person_dict.get("instagram_url") or "public_profile"
-                    evidence_list.append(EvidenceItem(
-                        claim=f"Demonstrates active domain engagement in {domain}",
-                        source_url=source_url,
-                        quote=f"Identified verifiable signals for '{kw}' within public professional description.",
-                        confidence=0.88
-                    ))
+                    if source_url:
+                        source_text = f"{headline} {bio}"
+                        quote_match = re.search(
+                            rf"[^.!?]*\b{re.escape(kw)}\b[^.!?]*[.!?]?",
+                            source_text,
+                            flags=re.IGNORECASE
+                        )
+                        evidence_list.append(EvidenceItem(
+                            claim=f"Profile text mentions {domain}",
+                            source_url=source_url,
+                            quote=quote_match.group(0).strip() if quote_match else source_text.strip(),
+                            confidence=0.65
+                        ))
                     break
-
-        # Fallback defaults if profile was sparse
-        if not matched_interests:
-            matched_interests = ["Technology & Innovation", "Lifelong Learning", "Professional Growth"]
 
         hobbies = []
         if any(w in combined_text for w in ["chess", "catan", "games", "gaming"]):
@@ -82,57 +84,32 @@ class ProfileAnalysisService:
             hobbies.append("Artisan Brewing & Culinary Exploration")
         if any(w in combined_text for w in ["music", "guitar", "piano", "concerts"]):
             hobbies.append("Acoustic Music & Instrumental Practice")
-        if not hobbies:
-            hobbies = ["Reading Non-Fiction", "Curated Coffee Exploration"]
-
-        # Lifestyle signals
-        if "founder" in combined_text or "ceo" in combined_text or "partner" in combined_text:
-            matched_lifestyle.append("High-agency entrepreneurial pace")
-        if "author" in combined_text or "podcast" in combined_text or "host" in combined_text:
-            matched_lifestyle.append("Public communicator and narrative storyteller")
-        if "wellness" in combined_text or "sleep" in combined_text or "mindfulness" in combined_text:
-            matched_lifestyle.append("Values holistic health, circadian rhythm, and intentional recovery")
-        if not matched_lifestyle:
-            matched_lifestyle.append("Focused intellectual curiosity and dedicated professional craft")
-
-        # Communication style inference from text length and tone
-        if len(bio) > 150 or "author" in combined_text:
-            comm_style = "Reflective, narrative-driven, and expressive with depth"
-        else:
-            comm_style = "Crisp, concise, goal-oriented, and direct"
-
-        social_preferences = [
-            "Prefers thoughtful 1-on-1 dialogue or salon discussions over superficial networking",
-            "Values authentic vulnerability and shared passion projects"
-        ]
-
-        compatibility_factors = [
-            f"Compatibility with partners who appreciate {matched_interests[0] if matched_interests else 'curiosity'}",
-            "Mutual respect for demanding creative pursuits and intellectual stamina",
-            "Shared prioritization of continuous learning and growth mindset"
-        ]
-
+        compatibility_factors = (
+            [f"Profile text mentions {matched_interests[0]}"]
+            if matched_interests else []
+        )
         summary = (
-            f"{name} is an accomplished public figure characterized by deep involvement in {', '.join(matched_interests[:3])}. "
-            f"Public records highlight an emphasis on {matched_lifestyle[0].lower()} and a preference for authentic, substantive connection."
+            f"{name}'s available profile text mentions {', '.join(matched_interests[:3])}."
+            if matched_interests else
+            f"Insufficient source text is available to infer interests or compatibility for {name}."
         )
 
         unknown_fields = [
-            "Private weekend domestic routines",
-            "Personal dietary preferences",
-            "Spontaneous micro-preferences"
+            "Interests and hobbies",
+            "Lifestyle and communication preferences",
+            "Compatibility factors"
         ]
 
         return ProfileAnalysis(
             summary=summary,
             interests=matched_interests,
             hobbies=hobbies,
-            lifestyle_signals=matched_lifestyle,
-            communication_style=comm_style,
-            social_preferences=social_preferences,
+            lifestyle_signals=[],
+            communication_style="",
+            social_preferences=[],
             compatibility_factors=compatibility_factors,
             evidence_references=evidence_list[:4],
-            confidence_score=0.91,
+            confidence_score=min(0.65, 0.35 + 0.1 * len(evidence_list)) if evidence_list else 0.0,
             unknown_fields=unknown_fields,
             analysis_engine="deterministic_fallback",
             analyzed_at=datetime.now(timezone.utc).isoformat()
@@ -198,14 +175,14 @@ class ProfileAnalysisService:
         from backend import config
         try:
             prompt = cls._build_analysis_prompt(person_dict)
-            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
             headers = {
                 "x-goog-api-key": config.GEMINI_API_KEY,
                 "Content-Type": "application/json"
             }
             payload = {
                 "contents": [{"parts": [{"text": f"Return JSON only conforming to the schema.\n\n{prompt}"}]}],
-                "generationConfig": {"response_mime_type": "application/json"}
+                "generationConfig": {"responseMimeType": "application/json"}
             }
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(url, json=payload, headers=headers)
@@ -217,11 +194,16 @@ class ProfileAnalysisService:
                     elif "```" in text:
                         text = text.split("```")[1].split("```")[0].strip()
                     content = json.loads(text)
-                    content["analysis_engine"] = "llm_gemini"
+                    content["analysis_engine"] = f"llm_gemini ({GEMINI_MODEL})"
                     content["analyzed_at"] = datetime.now(timezone.utc).isoformat()
                     return ProfileAnalysis.model_validate(content)
                 else:
-                    logger.warning(f"Gemini API returned status {resp.status_code}")
+                    error = resp.json().get("error", {}) if resp.headers.get("content-type", "").startswith("application/json") else {}
+                    logger.warning(
+                        "Gemini API returned status %s (%s)",
+                        resp.status_code,
+                        error.get("status", "provider error details unavailable")
+                    )
         except Exception as e:
             logger.warning(f"Gemini analysis failed, falling back to deterministic: {type(e).__name__}")
         return cls.deterministic_analyze(person_dict)
