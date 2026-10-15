@@ -5,6 +5,9 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
@@ -591,3 +594,24 @@ def update_settings(update: SettingsUpdate):
         llm_provider=config.LLM_PROVIDER,
         has_llm_key=bool(config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY or config.GEMINI_API_KEY)
     )
+
+# Serve the Vite frontend from the same origin in production deployments.
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend-assets")
+
+    @app.get("/", include_in_schema=False)
+    def serve_frontend_root():
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_frontend_routes(full_path: str):
+        # API and documentation paths must not fall back to the SPA.
+        if full_path == "api" or full_path.startswith(("api/", "docs", "redoc", "openapi.json")):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = (FRONTEND_DIST / full_path).resolve()
+        if candidate.is_file() and FRONTEND_DIST.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST / "index.html")
